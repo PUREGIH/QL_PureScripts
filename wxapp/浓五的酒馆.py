@@ -12,6 +12,7 @@
     - wxcenter， 你的 code server (http://localhost:5679)
 
 """
+import json
 import os
 import re
 
@@ -21,11 +22,28 @@ from fn_print import fn_print
 
 from get_env import get_env
 
-nwjg_tokens = get_env("nwjg_token", "@")
+DEV_CONFIG = {
+    "nwjg_token": [],
+    "wxcenter": "http://192.168.1.131:1535",
+    "wxid_nwjg": [""]
+}
 
-wxcenter = os.environ.get('wxcenter')
+# 检查当前环境是否为开发环境（例如基于环境变量或标志）
+# 如果未设置环境变量 ENV，则默认使用 'development'（开发环境）
+ENV = os.environ.get("ENV", "development")
 
-wxid_nwjg = get_env("wxid_nwjg", "#")
+# 根据环境选择配置
+if ENV == "development":
+    # 如果是开发环境，从 DEV_CONFIG 字典中获取测试值
+    nwjg_tokens = DEV_CONFIG.get("nwjg_token")
+    wxcenter = DEV_CONFIG.get("wxcenter")
+    wxid_nwjg = DEV_CONFIG.get("wxid_nwjg")
+else:
+    # 如果不是开发环境，从环境变量中读取实际值，并提供默认备用值
+    nwjg_tokens = get_env("nwjg_token", "@")
+    wxcenter = os.environ.get('wxcenter')
+    wxid_nwjg = get_env("wxid_nwjg", "#")
+
 
 app_id = "wxed3cf95a14b58a26"
 
@@ -84,31 +102,40 @@ class Nwjg:
         except Exception as e:
             fn_print(f"❌ 获取 code 失败: {e}")
 
-    # def get_sign_promotion_id(self) -> None:
-    #
-    #     try:
-    #         response = self.client.post(
-    #             url="https://stdcrm.dtmiller.com/scrm-promotion-service/mini/module/config/list",
-    #             headers=self.headers
-    #         ).json()
-    #
-    #         for module in response.get("data", []):
-    #             for detail in module.get("detailList", []):
-    #                 detail_json_str = detail.get("detailJson", "{}")
-    #                 detail_json = json.loads(detail_json_str)
-    #
-    #                 jump_data = detail_json.get("jumpData", {})
-    #                 page_path = jump_data.get("pagePath", "")
-    #
-    #                 match = re.search(r'promotionId=([A-Za-z0-9]+)', page_path)
-    #                 if match:
-    #                     promotion_id = match.group(1)
-    #                     fn_print(f"promotionId: {promotion_id}")
-    #                     self.promotionID = promotion_id  # Return the first found promotionId
-    #         fn_print("❌ 未找到 promotionID")
-    #
-    #     except Exception as e:
-    #         fn_print(f"❌ 获取 promotionID 异常: {e}")
+    def get_sign_promotion_id(self):
+
+        try:
+            response = self.client.post(
+                url="https://stdcrm.dtmiller.com/scrm-promotion-service/mini/module/config/list",
+                headers=self.headers
+            ).json()
+
+            if response.get('msg', None) is not None and "JWT expired" in response.get('msg'):
+                fn_print("获取活动ID失败: token已过期！")
+                return None
+
+            detailList = response['data'][1]['detailList']
+
+            for item in detailList:
+                detail_json = json.loads(item['detailJson'])
+                if detail_json['title'] == '每日签到':
+                    page_path = detail_json['jumpData']['pagePath']
+                    return re.search(r'promotionId=([^&]*)', page_path).group(1)
+
+            fn_print("未找到每日签到活动")
+            return None
+
+        except json.JSONDecodeError:
+            fn_print("获取活动ID失败: 响应不是有效的JSON格式")
+            return None
+
+        except KeyError as e:
+            fn_print(f"获取活动ID失败: 响应缺少必要字段 - {str(e)}")
+            return None
+
+        except Exception as e:
+            fn_print(f"获取活动ID发生异常: {type(e).__name__} - {str(e)}")
+            return None
 
     def get_token(self) -> None:
         try:
@@ -121,6 +148,7 @@ class Nwjg:
             if response['code'] == 0:
                 self.token = response['data']
                 fn_print(f"✅ 获取 token 成功")
+                self.promotionID = self.get_sign_promotion_id()
 
             else:
                 fn_print(f"❌ 获取 token 失败: {response.get('msg')}")
@@ -134,7 +162,7 @@ class Nwjg:
                 url="https://stdcrm.dtmiller.com/scrm-promotion-service/promotion/sign/today",
                 headers=self.headers,
                 params={
-                    "promotionId": "PI67c25977540856000aac6ac0"
+                    "promotionId": self.promotionID
                 }
             )
             if response.status_code == 200:
